@@ -1,0 +1,275 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[brazilian]{babel}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\captionsetup{font=small,labelfont=bf}
+\setlist{itemsep=2pt,topsep=3pt}
+\setlength{\parskip}{3pt}
+
+\newcommand{\autor}{Gustavo Aumiller Tarijon}
+\newcommand{\raaluno}{163790}
+\newcommand{\repo}{https://github.com/GustavoAumiller/redes-neurais-projeto1}
+
+\title{Projeto 1: Regressão com MLP e Estudo de Ablação}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-2.2cm}
+\noindent\textbf{Disciplina:} Introdução às Redes Neurais Artificiais\\
+\textbf{Autor(es):} \autor{} (RA: \raaluno)\\
+\textbf{Repositório / Código Reprodutível:} \url{\repo}
+
+\section{Configuração Experimental e Reprodutibilidade}
+
+\subsection{Pré-processamento e Partição dos Dados}
+O conjunto \texttt{dataset\_projeto1.csv} contém 300 pares $(x,y)$ com uma única entrada $x\in[0,10]$. A partição foi feita com \texttt{train\_test\_split} (\texttt{random\_state}=42) em duas etapas, resultando em \textbf{30 amostras de treino (10\%), 30 de validação (10\%) e 240 de teste (80\%)}. Essa restrição intencional no volume de treino torna a tarefa suscetível ao sobreajuste, o que torna a investigação de hiperparâmetros e de regularização relevante.
+
+O atributo $x$ foi padronizado com \texttt{StandardScaler}, com média e desvio ajustados (\textit{fit}) exclusivamente sobre as 30 amostras de treino; validação e teste receberam apenas \textit{transform}, evitando vazamento de dados. O alvo $y$ \textbf{não} foi escalonado, de modo que MSE, RMSE e MAE são reportados na escala original.
+
+\subsection{Definição e Otimização Empírica do Modelo Baseline (Vanilla)}
+O baseline é uma MLP básica treinada com SGD puro (\texttt{torch.optim.SGD}, momentum $=0$), sem Adam e sem qualquer regularização (L1, L2 ou Dropout). \textbf{A maior parte dos experimentos deste relatório usa o orçamento de 500 épocas}; o de 5000 épocas foi executado apenas para o baseline, para o momentum e para execuções com todos os componentes ativos, e é usado aqui como destaque de como o comportamento se acentua com mais treino.
+
+A busca foi empírica, em \textbf{uma única rodada de 500 épocas}, com oito configurações treinadas com a mesma semente e comparadas pelo menor MSE de validação (Tabela~\ref{tab:cand}). Ao final do treino restauram-se os pesos da época de menor MSE de validação (seleção de \textit{checkpoint}); não houve interrupção antecipada por paciência.
+
+\begin{table}[H]
+\centering\small
+\caption{Espaço amostrado e configuração final da MLP Baseline (Vanilla).}
+\label{tab:config}
+\begin{tabular}{p{3.0cm}p{6.7cm}p{5.2cm}}
+\toprule
+Hiperparâmetro & Valores explorados (busca) & Configuração usada na ablação \\
+\midrule
+Topologia (camadas ocultas) & tanh: [16], [32], [64], [128,64], [16,8]; ReLU: [32], [64], [64,128] & Entrada $\to$ Densa(128) $\to$ Densa(64) $\to$ Saída(1) (8577 parâmetros) \\
+Função de ativação & tanh, ReLU & ReLU (saída linear) \\
+Otimizador / taxa $\eta$ & SGD puro (momentum $=0$), $\eta=0.01$ (fixo) & SGD, $\eta=0.01$ \\
+Tamanho do lote & 16 & 32 (maior que as 30 amostras de treino: uma atualização por época) \\
+Função de custo & MSE & \texttt{MSELoss} \\
+Orçamento de épocas & 500 & 500 (principal) e 5000 (destaque) \\
+Critério de seleção & Menor MSE de validação (\textit{checkpoint} da melhor época) & idem \\
+Semente aleatória & Fixa, reiniciada antes de cada modelo & Seed $=42$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering\small
+\caption{Erros de validação dos oito modelos candidatos a baseline (500 épocas, $\eta=0.01$, lote 16), ordenados por MSE.}
+\label{tab:cand}
+\begin{tabular}{llrrrrr}
+\toprule
+Topologia & Ativ. & Melhor época & MSE & RMSE & MAE & $R^2$ \\
+\midrule
+1 $\to$ 64 $\to$ 128 $\to$ 1 & ReLU & 497 & 0.5314 & 0.7290 & 0.6041 & 0.1376 \\
+1 $\to$ 64 $\to$ 1 & ReLU & 493 & 0.5747 & 0.7581 & 0.6237 & 0.0672 \\
+1 $\to$ 32 $\to$ 1 & ReLU & 500 & 0.5799 & 0.7615 & 0.6253 & 0.0589 \\
+1 $\to$ 128 $\to$ 64 $\to$ 1 & tanh & 497 & 0.5972 & 0.7728 & 0.6380 & 0.0309 \\
+1 $\to$ 16 $\to$ 8 $\to$ 1 & tanh & 493 & 0.6035 & 0.7769 & 0.6292 & 0.0205 \\
+1 $\to$ 32 $\to$ 1 & tanh & 191 & 0.6072 & 0.7793 & 0.6310 & 0.0145 \\
+1 $\to$ 16 $\to$ 1 & tanh & 267 & 0.6124 & 0.7825 & 0.6366 & 0.0062 \\
+1 $\to$ 64 $\to$ 1 & tanh & 64 & 0.6134 & 0.7832 & 0.6385 & 0.0046 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A melhor configuração da busca foi ReLU com camadas ocultas $[64,128]$ (MSE de validação 0.531), seguida por ReLU $[64]$ (0.575) e ReLU $[32]$ (0.580). Cinco dos oito modelos tiveram a melhor época a menos de 2\% do fim do orçamento (493--500 de 500), ou seja, a rodada ainda não havia convergido, e a diferença entre o primeiro e o segundo colocado (0.043) foi obtida com uma única semente. A ablação foi feita com a arquitetura $1\to128\to64\to1$ com ReLU, que tem o mesmo número de parâmetros (8577) do vencedor da busca, mas com a ordem das camadas invertida: a variante $[128,64]$ com ReLU não foi avaliada na busca (só a com tanh, em 4º lugar, MSE 0.597). Com 500 épocas o baseline da ablação chega a MSE de treino $\approx0.46$ e de validação $0.571$, ambos ainda em queda (Fig.~\ref{fig:curvas}a).
+
+\paragraph{Reprodutibilidade.} A busca do baseline está em \texttt{baseline.py} e o estudo de ablação em \texttt{hiperparametros.py}. Cada resultado reportado corresponde a uma execução com os valores de $\beta$, $\lambda$, $p$ e número de épocas indicados nas tabelas; em cada modelo apenas um componente foi ativado por vez, e os demais ficaram desativados ($\beta=0$, $\lambda=0$, $p=0$). Os componentes são somados à perda ($\lambda\sum|w|$ e $\lambda\sum w^2$, sobre todos os parâmetros, sem o fator $1/2n$ dos slides) ou aplicados na rede (Dropout após cada camada oculta).
+
+\section{Dinâmica de Treinamento e Convergência (Baseline vs. Modificados)}
+A evolução do MSE de treino e de validação foi registrada a cada época. A Figura~\ref{fig:curvas} mostra o baseline e o momentum com 500 épocas (a, b) e com 5000 épocas (c, d), e a Figura~\ref{fig:val} compara a validação de todos os modelos nos dois orçamentos: só o momentum (linha superior) e todos os componentes ativos, com $\lambda_{L1}=\lambda_{L2}=0.1$, $p=0.2$ e $\beta=0.9$ (linha inferior). Todas as comparações usam a mesma arquitetura, a mesma semente e o mesmo lote.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.49\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig1a_baseline_500.png}\caption{Baseline, 500 épocas.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.49\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig1b_momentum_500.png}\caption{Momentum $\beta=0.9$, 500 épocas.}
+\end{subfigure}\\[4pt]
+\begin{subfigure}[t]{0.49\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig1c_baseline_5000.png}\caption{Baseline, 5000 épocas.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.49\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig1d_momentum_5000.png}\caption{Momentum $\beta=0.9$, 5000 épocas.}
+\end{subfigure}
+\caption{MSE de treino e de validação (lote 32). Como o lote é maior que o conjunto de treino, o MSE de treino é o de uma única atualização por época.}
+\label{fig:curvas}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.49\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig2a_mom_500.png}\caption{Só momentum, 500 épocas.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.49\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig2b_mom_5000.png}\caption{Só momentum, 5000 épocas.}
+\end{subfigure}\\[4pt]
+\begin{subfigure}[t]{0.49\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig2c_todos_500.png}\caption{Todos os componentes, 500 épocas.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.49\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig2d_todos_5000.png}\caption{Todos os componentes, 5000 épocas.}
+\end{subfigure}
+\caption{MSE de validação: evolução de 500 para 5000 épocas. Em (a) e (b), L1, L2 e Dropout estavam desativados e coincidem com o baseline (a curva do baseline fica sob elas). Em (c) e (d): L1 e L2 com $\lambda=0.1$, Dropout $p=0.2$, momentum $\beta=0.9$, cada um em um modelo separado.}
+\label{fig:val}
+\end{figure}
+
+\noindent\textbf{Análise crítica da dinâmica de convergência:}
+\begin{itemize}
+\item \textbf{Estabilidade do SGD.} Com $\eta=0.01$ o baseline não divergiu. Como o lote (32) excede as 30 amostras de treino, cada época é uma atualização com o gradiente completo, e as curvas são suaves, sem ruído de mini-lote. Com 500 épocas a validação cai de $\approx0.78$ para $\approx0.61$ nas primeiras épocas e depois decresce quase linearmente até 0.571, sem convergir (melhor época 500; Fig.~\ref{fig:curvas}a). Com 5000 épocas continua caindo, até 0.396 (melhor época 4995; Fig.~\ref{fig:curvas}c): a convergência é lenta com essa taxa.
+\item \textbf{Sobreajuste.} Com 500 épocas não há sinal de sobreajuste: treino ($\approx0.46$) e validação (0.571) caem juntos, tanto no baseline quanto no momentum ($\approx0.30$ e 0.41). O sobreajuste aparece com o treino mais longo e, sobretudo, com momentum: com 5000 épocas o MSE de treino do momentum cai a $\approx0.03$ enquanto o de validação estaciona em torno de 0.25--0.30 (Fig.~\ref{fig:curvas}d). No baseline com 5000 épocas a distância entre treino ($\approx0.27$) e validação (0.396) é de $\approx0.13$, e o erro de teste (0.529) é pior que prever a média do treino (0.523; Tabela~\ref{tab:destaque}).
+\item \textbf{Aceleração com momentum.} Sim. Com 500 épocas o momentum $\beta=0.9$ chega a 0.408 de MSE de validação, contra 0.571 do baseline (Fig.~\ref{fig:val}a), e o baseline só atinge esse nível por volta da época 4500 (Fig.~\ref{fig:curvas}c), cerca de nove vezes mais épocas. O custo é a instabilidade: oscilações nas primeiras $\approx50$ épocas (a validação chega a $\approx0.81$) e, com 5000 épocas, picos de perda entre as épocas $\approx880$ e $\approx2700$ (o de validação chega a 2.1 na época $\approx1550$), coerentes com um passo efetivo maior ($\eta/(1-\beta)=0.1$).
+\item \textbf{Todos os componentes, de 500 para 5000 épocas (Fig.~\ref{fig:val}c e d).} Com $\lambda=0.1$, L1 e L2 travam cedo: a validação de L1 sobe até $\approx0.63$ por volta da época 85 e estabiliza em $\approx0.62$, e a de L2 fica em $\approx0.60$, e nenhuma muda entre 500 e 5000 épocas (as melhores épocas, 23 e 360, ocorrem antes de 500). O Dropout $p=0.2$ acompanha o baseline com pequena defasagem em 500 épocas (0.586 contra 0.571) e continua descendo até 0.459 em 5000, ainda acima do baseline (0.396). O momentum se separa cedo dos demais e chega a 0.206 em 5000 épocas.
+\end{itemize}
+
+\section{Estudo de Ablação e Desempenho no Conjunto de Teste}
+Para isolar o efeito de cada componente, a arquitetura (camadas, ativações, semente e inicialização) foi mantida idêntica à da Tabela~\ref{tab:config}, avaliando-se as variações individuais abaixo com 500 épocas (Tabela~\ref{tab:abl}).
+\begin{enumerate}
+\item Baseline + Momentum: $\beta\in\{0.25,0.5,0.75,0.9\}$.
+\item Baseline + L2: $\lambda\in\{10^{-3},10^{-2},10^{-1}\}$.
+\item Baseline + L1: $\lambda\in\{10^{-3},10^{-2},10^{-1}\}$.
+\item Baseline + Dropout (após cada camada oculta): $p\in\{0.1,0.2,0.3,0.5\}$.
+\end{enumerate}
+Combinações de componentes (modelo combinado) não foram avaliadas. As métricas são do conjunto de teste (240 amostras, não usado para treino nem para seleção); $R^2<0$ indica desempenho pior que prever a média do treino. A coluna de épocas indica a época do melhor MSE de validação. Pelo MSE de validação, os melhores valores seriam $\beta=0.9$, $\lambda=10^{-3}$ (L1 e L2) e $p=0.1$.
+
+\begin{table}[H]
+\centering\small
+\caption{Estudo de ablação no conjunto de teste (80\% dos dados), orçamento de 500 épocas.}
+\label{tab:abl}
+\begin{tabular}{lrrrrrr}
+\toprule
+Modelo / Variação & MSE val. & MSE & RMSE & MAE & $R^2$ & Melhor época \\
+\midrule
+Baseline (SGD, $\eta$=0.01) & 0.5711 & 0.5586 & 0.7474 & 0.6108 & -0.1085 & 500 \\
+\midrule
++ Momentum ($\beta$=0.25) & 0.5542 & 0.5499 & 0.7415 & 0.6100 & -0.0912 & 500 \\
++ Momentum ($\beta$=0.5) & 0.5225 & 0.5366 & 0.7326 & 0.6095 & -0.0649 & 500 \\
++ Momentum ($\beta$=0.75) & 0.4711 & 0.5346 & 0.7312 & 0.6148 & -0.0609 & 500 \\
++ Momentum ($\beta$=0.9) & 0.4080 & 0.5204 & 0.7214 & 0.6041 & -0.0327 & 496 \\
+\midrule
++ L2 ($\lambda$=$10^{-3}$) & 0.5721 & 0.5588 & 0.7475 & 0.6106 & -0.1089 & 498 \\
++ L2 ($\lambda$=$10^{-2}$) & 0.5797 & 0.5607 & 0.7488 & 0.6102 & -0.1128 & 500 \\
++ L2 ($\lambda$=$10^{-1}$) & 0.6018 & 0.5321 & 0.7294 & 0.5929 & -0.0559 & 360 \\
+\midrule
++ L1 ($\lambda$=$10^{-3}$) & 0.5750 & 0.5602 & 0.7484 & 0.6108 & -0.1116 & 498 \\
++ L1 ($\lambda$=$10^{-2}$) & 0.5972 & 0.5501 & 0.7417 & 0.6024 & -0.0916 & 500 \\
++ L1 ($\lambda$=$10^{-1}$) & 0.6112 & 0.5087 & 0.7132 & 0.5811 & -0.0094 & 23 \\
+\midrule
++ Dropout ($p$=0.1) & 0.5775 & 0.5493 & 0.7411 & 0.6051 & -0.0900 & 491 \\
++ Dropout ($p$=0.2) & 0.5858 & 0.5461 & 0.7390 & 0.6022 & -0.0837 & 495 \\
++ Dropout ($p$=0.3) & 0.5891 & 0.5409 & 0.7354 & 0.5994 & -0.0733 & 476 \\
++ Dropout ($p$=0.5) & 0.6033 & 0.5255 & 0.7249 & 0.5912 & -0.0429 & 498 \\
+\midrule
+Referência: prever a média do treino & 0.6300 & 0.5229 & 0.7231 & 0.5857 & -0.0376 & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Destaque: de 500 para 5000 épocas.} A Tabela~\ref{tab:destaque} compara os dois orçamentos para a execução geral (L1 e L2 com $\lambda=0.1$, $p=0.2$, $\beta=0.9$). As linhas de L1 e L2 são idênticas nos dois orçamentos porque a melhor época de validação (23 e 360) vem antes de 500. Uma execução adicional de 5000 épocas com $\lambda_{L1}=\lambda_{L2}=10^{-3}$ deu MSE de teste 0.535 (L1) e 0.539 (L2), próximo do baseline (0.529).
+
+\begin{table}[H]
+\centering\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{Comparação entre 500 e 5000 épocas (execução geral; MSE e $R^2$ de teste).}
+\label{tab:destaque}
+\begin{tabular}{lrrrr@{\hspace{12pt}}rrrr}
+\toprule
+ & \multicolumn{4}{c}{500 épocas} & \multicolumn{4}{c}{5000 épocas} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}
+Modelo & Época & MSE val. & MSE teste & $R^2$ & Época & MSE val. & MSE teste & $R^2$ \\
+\midrule
+Baseline & 500 & 0.5711 & 0.5586 & -0.1085 & 4995 & 0.3961 & 0.5290 & -0.0497 \\
+Momentum ($\beta$=0.9) & 496 & 0.4080 & 0.5204 & -0.0327 & 3209 & 0.2058 & 0.3051 & 0.3946 \\
+Dropout ($p$=0.2) & 495 & 0.5858 & 0.5461 & -0.0837 & 4999 & 0.4586 & 0.4880 & 0.0317 \\
+L2 ($\lambda$=0.1) & 360 & 0.6018 & 0.5321 & -0.0559 & 360 & 0.6018 & 0.5321 & -0.0559 \\
+L1 ($\lambda$=0.1) & 23 & 0.6112 & 0.5087 & -0.0094 & 23 & 0.6112 & 0.5087 & -0.0094 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Efetividade comparada dos componentes.} A Figura~\ref{fig:parity500} mostra o gráfico de valor real $\times$ previsto no teste para os cinco modelos da execução geral com 500 épocas, e a Figura~\ref{fig:parity5000}, com 5000 épocas. A Tabela~\ref{tab:efet} resume a diferença de MSE de teste em relação ao baseline do mesmo orçamento (negativo é melhor) e o que se vê nos gráficos.
+
+\begin{table}[H]
+\centering\small
+\caption{Efetividade de cada componente: variação do MSE de teste em relação ao baseline do mesmo orçamento e leitura dos gráficos real $\times$ previsto.}
+\label{tab:efet}
+\begin{tabular}{p{3.3cm}rrp{7.4cm}}
+\toprule
+Componente & $\Delta$MSE (500) & $\Delta$MSE (5000) & Gráfico real $\times$ previsto \\
+\midrule
+Momentum ($\beta$=0.9) & -0.038 & -0.224 & Único que amplia a faixa de predições já com 500 épocas e, com 5000, passa a acompanhar a diagonal; ainda subestima os extremos. \\
+Dropout ($p$=0.2) & -0.013 & -0.041 & Parecido com o baseline com 500 épocas; com 5000 tem inclinação positiva, mas faixa de predições mais estreita que a do baseline. \\
+L2 ($\lambda$=0.1) & -0.027 & +0.003 & Predições quase constantes ($\approx$0.4--0.9), sem mudança entre 500 e 5000 épocas. \\
+L1 ($\lambda$=0.1) & -0.050 & -0.020 & Predições quase constantes ($\approx$0.4--0.65), sem mudança entre 500 e 5000 épocas; colapso mais forte que o de L2. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig3_parity500_baseline.png}\caption{Baseline.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig3_parity500_l1.png}\caption{L1 ($\lambda=0.1$).}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig3_parity500_l2.png}\caption{L2 ($\lambda=0.1$).}
+\end{subfigure}\\[4pt]
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig3_parity500_dropout.png}\caption{Dropout ($p=0.2$).}
+\end{subfigure}\hspace{0.03\textwidth}
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig3_parity500_momentum.png}\caption{Momentum ($\beta=0.9$).}
+\end{subfigure}
+\caption{Valor real $\times$ previsto no conjunto de teste (240 amostras), execução geral com \textbf{500 épocas}; a linha tracejada é $y=x$.}
+\label{fig:parity500}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig4_parity5000_baseline.png}\caption{Baseline.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig4_parity5000_l1.png}\caption{L1 ($\lambda=0.1$).}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig4_parity5000_l2.png}\caption{L2 ($\lambda=0.1$).}
+\end{subfigure}\\[4pt]
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig4_parity5000_dropout.png}\caption{Dropout ($p=0.2$).}
+\end{subfigure}\hspace{0.03\textwidth}
+\begin{subfigure}[t]{0.32\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/fig4_parity5000_momentum.png}\caption{Momentum ($\beta=0.9$).}
+\end{subfigure}
+\caption{Valor real $\times$ previsto no conjunto de teste (240 amostras), execução geral com \textbf{5000 épocas}; a linha tracejada é $y=x$.}
+\label{fig:parity5000}
+\end{figure}
+
+\section{Discussão e Lições Aprendidas}
+\begin{itemize}
+\item \textbf{SGD vanilla com poucos dados (10\% de treino).} A rede tem 8577 parâmetros para 30 amostras de treino. Com 500 épocas o baseline tem $R^2=-0.109$ no teste (MSE 0.559, cerca de 7\% pior que o 0.523 de prever a média do treino) e, com 5000 épocas, $R^2=-0.050$ (0.529), apesar de $R^2$ de validação de 0.073 e 0.357. A validação de 30 pontos não é representativa: sua variância (0.616) é maior que a do teste (0.504), e prever a média já dá MSE 0.630 na validação. Por isso a seleção por validação é pouco confiável neste problema. Com 500 épocas nenhuma técnica melhora a validação; no teste, os componentes fracos ($\lambda=10^{-3}$, $\beta\le0.5$) variam o MSE em até cerca de 0.02, e os ganhos de L1, L2 e Dropout fortes vêm de aproximar o modelo de uma predição constante (L1 com $\lambda=0.1$: 0.509 contra 0.559), não de melhor aprendizado da função; o momentum, ao contrário, melhora também a validação. Dentre as técnicas, o \textbf{momentum} é a mais efetiva (Tabela~\ref{tab:efet}), e o Dropout é a única regularização com ganho no teste com 5000 épocas.
+\item \textbf{Ação específica dos componentes de ablação:}
+  \begin{itemize}
+  \item \textit{Momentum.} Mudou claramente a velocidade da curva (Fig.~\ref{fig:val}a). Com 500 épocas o MSE de validação melhora monotonicamente com $\beta$ (0.571 $\to$ 0.554, 0.523, 0.471, 0.408), com ganho pequeno no teste (0.559 $\to$ 0.520); com 5000 épocas o ganho no teste é grande (0.529 $\to$ 0.305, $R^2=0.39$). Como o baseline ainda melhorava ao fim do orçamento (melhor época 4995), parte do ganho reflete velocidade de otimização, e não necessariamente um patamar melhor; não há execuções com orçamentos maiores para separar os dois efeitos.
+  \item \textit{L1 vs.\ L2.} Com $\lambda=10^{-3}$ os dois praticamente não alteram o baseline (validação 0.575 e 0.572 com 500 épocas). Com o mesmo $\lambda$, L1 é mais agressiva: em $10^{-2}$ o MSE de validação é 0.597 (L1) contra 0.580 (L2), e em $0.1$ a melhor época é a 23 (L1) contra a 360 (L2), com $R^2$ de validação de 0.008 e 0.023. Nos gráficos real $\times$ previsto ambos colapsam para predições quase constantes (Figs.~\ref{fig:parity500} e~\ref{fig:parity5000}), o que não muda com mais épocas. Não foi medida a esparsidade dos pesos; com uma única entrada, o uso de L1 para seleção de atributos também não se aplica.
+  \item \textit{Dropout.} Com 500 épocas, aumentar $p$ de 0.1 a 0.5 piora o MSE de validação (0.578 $\to$ 0.603) e melhora o de teste (0.549 $\to$ 0.526), padrão que se repete com 5000 épocas ($p=0.2$: validação 0.459 contra 0.396 do baseline, teste 0.488 contra 0.529). Como validação e teste discordam, o sinal favorável ao Dropout deve ser lido com cautela. Com 500 épocas o gráfico real $\times$ previsto do Dropout é parecido com o do baseline (Fig.~\ref{fig:parity500}); com 5000 épocas ele passa a ter inclinação positiva, mas com faixa de predições mais estreita que a do baseline (Fig.~\ref{fig:parity5000}).
+  \item \textit{Outras análises.} A mudança de 500 para 5000 épocas acentua as diferenças: o baseline ($-0.109\to-0.050$ de $R^2$) e o Dropout ($-0.084\to0.032$) melhoram pouco, o momentum passa de $-0.033$ a $0.395$, e L1 e L2 fortes não mudam (Tabela~\ref{tab:destaque}). Os valores varridos apenas com 500 épocas (Tabela~\ref{tab:abl}) refletem em boa parte a velocidade de aprendizado, já que o baseline ainda não havia convergido.
+  \end{itemize}
+\item \textbf{Análise de resíduos e limitações.} Com 500 épocas (Fig.~\ref{fig:parity500}) o baseline prevê valores entre $\approx0.15$ e 1.4 sem relação visível com o valor real; L1 ($\approx0.4$--0.65) e L2 ($\approx0.4$--0.9) colapsam para uma faixa quase constante; o Dropout é semelhante ao baseline ($\approx0.2$--1.2); e o momentum é o único com faixa ampla ($\approx-0.3$ a 2.3), mas com muitas superestimativas (valores reais entre $\approx0.5$ e 1.8 previstos em $\approx2.0$--2.3). Com 5000 épocas (Fig.~\ref{fig:parity5000}) o baseline ganha inclinação e dispersão ($\approx-0.3$ a 2.3), o Dropout fica intermediário ($\approx-0.15$ a 1.8), L1 e L2 não mudam e o momentum forma uma nuvem alinhada à diagonal, inclusive na cauda inferior. Persiste em todos os modelos a subestimação dos maiores valores reais ($\approx1.9$ e $\approx2.65$, previstos entre 0.4 e 0.9) e, nos modelos com faixa de predições ampla (momentum e baseline com 5000 épocas), um grupo de superestimativas ($y$ real entre $\approx0.5$ e 1.8, previsto em $\approx2$--2.4). O alvo é ruidoso; uma estimativa exploratória da variância do ruído, pela diferença entre pontos vizinhos nos 300 pontos, dá um limite superior aproximado de 0.17, bem abaixo dos MSE obtidos, o que sugere que o gargalo é a escassez de dados e de treino, e não o ruído irredutível. O gráfico de resíduos $y-\hat y$ não foi produzido; a análise se baseia nos gráficos real $\times$ previsto.
+\item \textbf{Limitações.} (i) Uma única semente (42), sem estimativa de variância; (ii) validação de 30 amostras, usada também para escolher a época; (iii) a busca do baseline foi de uma única rodada de 500 épocas, sem convergência, com espaço restrito, e a ordem das camadas usada na ablação ($[128,64]$) difere da do vencedor da busca ($[64,128]$); (iv) a busca usou lote 16 (duas atualizações por época) e a ablação usou lote 32 (uma atualização por época, gradiente completo); (v) as varreduras de $\beta$, $\lambda$ e $p$ foram feitas com 500 épocas, regime em que o baseline ainda não convergiu, e o orçamento de 5000 épocas só foi executado para o baseline, o momentum e as execuções com todos os componentes ativos; (vi) sem orçamentos maiores que 5000 épocas e sem modelo combinado.
+\end{itemize}
+
+\end{document}
